@@ -8,20 +8,29 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- Carga de Firebase SDKs -->
     <script type="module">
-        // Importa los módulos de Firebase que vamos a usar
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, doc, addDoc, onSnapshot, collection, query, updateDoc, deleteDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-        import { setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+      // Import the functions you need from the SDKs you need
+      import { initializeApp } from "https://www.gstatic.com/firebasejs/12.3.0/firebase-app.js";
+      import { getAnalytics } from "https://www.gstatic.com/firebasejs/12.3.0/firebase-analytics.js";
+      // TODO: Add SDKs for Firebase products that you want to use
+      // https://firebase.google.com/docs/web/setup#available-libraries
+    
+      // Your web app's Firebase configuration
+      // For Firebase JS SDK v7.20.0 and later, measurementId is optional
+      const firebaseConfig = {
+        apiKey: "AIzaSyDwvQbBjaXRG6X57X8P25b-K9dcGoEwkwA",
+        authDomain: "appgestionbitehouse.firebaseapp.com",
+        projectId: "appgestionbitehouse",
+        storageBucket: "appgestionbitehouse.firebasestorage.app",
+        messagingSenderId: "14679093593",
+        appId: "1:14679093593:web:d84159f35ec7b61dc09c48",
+        measurementId: "G-HCCWJKYWN0"
+      };
 
-        // Configuración de Firebase (variables globales proporcionadas por el entorno)
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
-        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
-
-        let db, auth;
-        let userId = null;
-        let isAuthReady = false;
+  // Initialize Firebase
+  const app = initializeApp(firebaseConfig);
+  const analytics = getAnalytics(app);
+</script>
+        
 
         // Catálogo de Productos (Temática Arcade Vaporwave con precios de ejemplo)
         const PRODUCT_CATALOG = {
