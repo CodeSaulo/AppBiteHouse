@@ -1,0 +1,542 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BiteHouse - Gestión de Pedidos</title>
+    <!-- Carga de Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Carga de Firebase SDKs -->
+    <script type="module">
+        // Importa los módulos de Firebase que vamos a usar
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, addDoc, onSnapshot, collection, query, updateDoc, deleteDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Configuración de Firebase (variables globales proporcionadas por el entorno)
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+        let db, auth;
+        let userId = null;
+        let isAuthReady = false;
+
+        // Catálogo de Productos (Temática Arcade Vaporwave con precios de ejemplo)
+        const PRODUCT_CATALOG = {
+            // HAMBURGUESAS (JEFES DE NIVEL)
+            'Pixel King': 16.00,
+            'Final Boss': 20.00,
+            'Cyber Patty': 18.00,
+            'Eco-Sphere (Veg)': 15.00,
+            // HOT DOGS (POWER-UPS)
+            'Debug Dog': 8.00,
+            'Turbo Dog': 10.00,
+            // SINCRONIZADAS (ESCUDOS/HACKS)
+            'Shield Sync': 12.00,
+            'Code Breaker': 14.00,
+            // PAPAS A LA FRANCESA (MONEDAS)
+            'Coin Drop Fries': 5.00,
+            'Glitch Fries': 9.00
+        };
+
+        window.PRODUCT_CATALOG = PRODUCT_CATALOG; // Hace el catálogo accesible globalmente
+
+        // Configuración de Tailwind para los colores Vaporwave
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        'background-dark': '#1A1A2E',
+                        'primary-fuchsia': '#E94560',
+                        'secondary-cyan': '#00FFFF',
+                        'card-dark': '#2C2C4A',
+                        'text-light': '#F6F7E9',
+                        'status-pending': '#E94560', // Fuchsia
+                        'status-prep': '#FFD000',     // Amarillo
+                        'status-ready': '#00FFFF',    // Cyan
+                        'status-done': '#4CAF50',     // Verde (éxito)
+                    },
+                    fontFamily: {
+                        'sans': ['Inter', 'sans-serif'],
+                        'mono': ['"Press Start 2P"', 'cursive'], // Fuente para toque Arcade
+                    },
+                }
+            }
+        }
+
+        // --- Inicialización de Firebase ---
+        function initializeFirebase() {
+            if (!firebaseConfig) {
+                console.error("Firebase config is missing.");
+                return;
+            }
+
+            try {
+                const app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+                auth = getAuth(app);
+                setLogLevel('Debug'); // Habilitar logs para depuración
+
+                onAuthStateChanged(auth, async (user) => {
+                    if (user) {
+                        userId = user.uid;
+                    } else {
+                        userId = null;
+                    }
+
+                    if (!isAuthReady) {
+                        // Intentar iniciar sesión con el token personalizado si está disponible
+                        if (initialAuthToken) {
+                            try {
+                                await signInWithCustomToken(auth, initialAuthToken);
+                            } catch (e) {
+                                console.error("Error signing in with custom token, signing in anonymously:", e);
+                                await signInAnonymously(auth);
+                            }
+                        } else {
+                            await signInAnonymously(auth);
+                        }
+                        userId = auth.currentUser?.uid || crypto.randomUUID();
+                        isAuthReady = true;
+                        console.log("Auth initialized. Current User ID:", userId);
+                        document.getElementById('user-info').textContent = `ID Usuario: ${userId}`;
+                        setupOrderListener();
+                    }
+                });
+
+                // Exportar funciones y variables necesarias al scope global (window)
+                window.db = db;
+                window.auth = auth;
+                window.getUserId = () => userId;
+                window.addOrderToDB = addOrderToDB;
+                window.updateOrderStatus = updateOrderStatus;
+                window.deleteOrderFromDB = deleteOrderFromDB;
+                window.isAuthReady = () => isAuthReady;
+            } catch (e) {
+                console.error("Error during Firebase initialization:", e);
+            }
+        }
+
+        // --- Operaciones de Base de Datos ---
+
+        // Ruta de la colección: /artifacts/{appId}/public/data/orders
+        function getOrdersCollectionRef() {
+            if (!db || !userId) {
+                console.error("DB or User ID not ready.");
+                return null;
+            }
+            const path = `artifacts/${appId}/public/data/orders`;
+            return collection(db, path);
+        }
+
+        /** Agrega una nueva orden a Firestore. */
+        async function addOrderToDB(orderData) {
+            const ordersRef = getOrdersCollectionRef();
+            if (!ordersRef) return;
+
+            try {
+                await addDoc(ordersRef, {
+                    ...orderData,
+                    status: 'Pendiente',
+                    createdAt: Date.now(),
+                    createdBy: userId
+                });
+                console.log("Orden agregada a Firestore.");
+            } catch (error) {
+                console.error("Error al agregar la orden:", error);
+            }
+        }
+
+        /** Actualiza el estado de una orden. */
+        async function updateOrderStatus(orderId, newStatus) {
+            const ordersRef = getOrdersCollectionRef();
+            if (!ordersRef) return;
+
+            try {
+                const orderDocRef = doc(ordersRef, orderId);
+                await updateDoc(orderDocRef, {
+                    status: newStatus
+                });
+                console.log(`Estado de la orden ${orderId} actualizado a ${newStatus}`);
+            } catch (error) {
+                console.error("Error al actualizar el estado de la orden:", error);
+            }
+        }
+
+        /** Elimina una orden. */
+        async function deleteOrderFromDB(orderId) {
+            const ordersRef = getOrdersCollectionRef();
+            if (!ordersRef) return;
+
+            try {
+                const orderDocRef = doc(ordersRef, orderId);
+                await deleteDoc(orderDocRef);
+                console.log(`Orden ${orderId} eliminada.`);
+            } catch (error) {
+                console.error("Error al eliminar la orden:", error);
+            }
+        }
+
+
+        // --- Renderizado y Listeners ---
+
+        /** Escucha cambios en las órdenes en tiempo real. */
+        function setupOrderListener() {
+            if (!db || !isAuthReady) return;
+
+            const ordersRef = getOrdersCollectionRef();
+            if (!ordersRef) return;
+
+            const q = query(ordersRef);
+
+            onSnapshot(q, (snapshot) => {
+                const orders = [];
+                snapshot.forEach((doc) => {
+                    orders.push({ id: doc.id, ...doc.data() });
+                });
+                renderOrders(orders);
+            }, (error) => {
+                console.error("Error al escuchar las órdenes:", error);
+            });
+        }
+
+        /** Muestra el catálogo de productos en el selector */
+        function setupProductSelector() {
+            const selector = document.getElementById('product-select');
+            const priceDisplay = document.getElementById('unit-price');
+
+            // Limpiar opciones existentes
+            selector.innerHTML = '<option value="" disabled selected>Seleccionar Producto...</option>';
+
+            for (const [name, price] of Object.entries(PRODUCT_CATALOG)) {
+                const option = document.createElement('option');
+                option.value = name;
+                option.textContent = `${name} ($${price.toFixed(2)})`;
+                selector.appendChild(option);
+            }
+
+            // Actualizar precio unitario al cambiar el producto
+            selector.addEventListener('change', (e) => {
+                const selectedProduct = e.target.value;
+                const price = PRODUCT_CATALOG[selectedProduct];
+                priceDisplay.value = price ? price.toFixed(2) : '';
+            });
+
+            // Inicializar precio a 0.00
+            priceDisplay.value = '0.00';
+        }
+
+        /** Renderiza la lista de órdenes en el dashboard. */
+        function renderOrders(orders) {
+            const container = document.getElementById('orders-dashboard');
+            container.innerHTML = ''; // Limpiar dashboard
+
+            if (orders.length === 0) {
+                container.innerHTML = '<p class="text-text-light text-center py-4 text-lg">No hay órdenes activas. ¡Hora de empezar a vender!</p>';
+                return;
+            }
+
+            // Ordenar por estado (Pendiente primero, luego En Preparación, luego Listo) y luego por fecha
+            const sortedOrders = orders.sort((a, b) => {
+                const statusOrder = { 'Pendiente': 1, 'En Preparación': 2, 'Listo': 3, 'Entregado': 4 };
+                const statusDiff = statusOrder[a.status] - statusOrder[b.status];
+                if (statusDiff !== 0) return statusDiff;
+                return a.createdAt - b.createdAt; // Ordenar por fecha si el estado es el mismo
+            });
+
+            sortedOrders.forEach(order => {
+                const total = order.items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+                const orderCard = document.createElement('div');
+                orderCard.className = `p-4 rounded-xl shadow-lg transition-transform transform hover:scale-[1.01] border-2 border-primary-fuchsia ${order.status === 'Entregado' ? 'bg-card-dark opacity-50' : 'bg-card-dark'}`;
+                
+                // Función para obtener el color de estado
+                const getStatusColor = (status) => {
+                    switch (status) {
+                        case 'Pendiente': return 'text-status-pending border-status-pending';
+                        case 'En Preparación': return 'text-status-prep border-status-prep';
+                        case 'Listo': return 'text-status-ready border-status-ready';
+                        case 'Entregado': return 'text-status-done border-status-done';
+                        default: return 'text-gray-400 border-gray-400';
+                    }
+                };
+
+                const statusColor = getStatusColor(order.status);
+                
+                orderCard.innerHTML = `
+                    <div class="flex justify-between items-start mb-3 border-b border-gray-700 pb-2">
+                        <div class="flex flex-col">
+                            <h3 class="text-2xl font-bold text-secondary-cyan font-mono">${order.customerName || 'Cliente Anónimo'}</h3>
+                            <p class="text-sm text-gray-400">Orden ID: ${order.id.substring(0, 8)}</p>
+                        </div>
+                        <span class="text-2xl font-extrabold ${statusColor}">${total.toFixed(2)} $</span>
+                    </div>
+
+                    <p class="text-lg font-semibold mb-2 ${statusColor} border px-2 py-1 inline-block rounded-full text-xs">${order.status.toUpperCase()}</p>
+                    
+                    <ul class="space-y-1 mb-4 text-text-light">
+                        ${order.items.map(item => `
+                            <li class="text-sm border-l-2 border-primary-fuchsia pl-2">
+                                <span class="text-primary-fuchsia font-bold">${item.quantity}x</span> ${item.name} 
+                                <span class="float-right text-gray-400">($${(item.price * item.quantity).toFixed(2)})</span>
+                            </li>
+                        `).join('')}
+                    </ul>
+
+                    <div class="flex flex-wrap gap-2 pt-2 border-t border-gray-700">
+                        <button onclick="updateOrderStatus('${order.id}', 'En Preparación')" class="action-btn text-status-prep border border-status-prep hover:bg-status-prep hover:text-background-dark">Preparar</button>
+                        <button onclick="updateOrderStatus('${order.id}', 'Listo')" class="action-btn text-status-ready border border-status-ready hover:bg-status-ready hover:text-background-dark">Listo</button>
+                        <button onclick="updateOrderStatus('${order.id}', 'Entregado')" class="action-btn text-status-done border border-status-done hover:bg-status-done hover:text-background-dark">Entregado</button>
+                        <button onclick="deleteOrderFromDB('${order.id}')" class="action-btn text-gray-500 border border-gray-500 hover:bg-gray-500 hover:text-white ml-auto">X Eliminar</button>
+                    </div>
+                `;
+                container.appendChild(orderCard);
+            });
+        }
+
+
+        // --- Lógica del Formulario ---
+
+        // Array temporal para almacenar los items de la orden actual antes de enviarla
+        let currentOrderItems = [];
+
+        window.addItemToOrder = () => {
+            const productSelect = document.getElementById('product-select');
+            const quantityInput = document.getElementById('quantity-input');
+            const product = productSelect.value;
+            const quantity = parseInt(quantityInput.value);
+
+            if (!product || quantity <= 0) {
+                // Usar mensaje modal en lugar de alert()
+                document.getElementById('message-box').textContent = "Por favor, selecciona un producto y una cantidad válida.";
+                document.getElementById('message-box-container').classList.remove('hidden');
+                setTimeout(() => document.getElementById('message-box-container').classList.add('hidden'), 3000);
+                return;
+            }
+
+            const price = PRODUCT_CATALOG[product];
+            
+            // Agregar item al array temporal
+            currentOrderItems.push({
+                name: product,
+                price: price,
+                quantity: quantity
+            });
+
+            // Renderizar la lista temporal
+            renderCurrentOrder();
+            
+            // Resetear el formulario de item
+            productSelect.selectedIndex = 0;
+            document.getElementById('unit-price').value = price.toFixed(2); // Vuelve al precio del primer item
+            quantityInput.value = 1;
+        };
+        
+        window.removeItemFromOrder = (index) => {
+            currentOrderItems.splice(index, 1);
+            renderCurrentOrder();
+        };
+
+        function renderCurrentOrder() {
+            const list = document.getElementById('current-order-list');
+            const totalDisplay = document.getElementById('order-total');
+            list.innerHTML = '';
+            let total = 0;
+
+            if (currentOrderItems.length === 0) {
+                list.innerHTML = '<li class="text-gray-400 italic">Añade productos a la orden.</li>';
+            }
+
+            currentOrderItems.forEach((item, index) => {
+                const subtotal = item.price * item.quantity;
+                total += subtotal;
+
+                const listItem = document.createElement('li');
+                listItem.className = 'flex justify-between items-center text-sm border-b border-gray-600 py-1';
+                listItem.innerHTML = `
+                    <span>
+                        <span class="text-secondary-cyan font-bold">${item.quantity}x</span> ${item.name} 
+                    </span>
+                    <span class="text-primary-fuchsia font-mono">${subtotal.toFixed(2)} $</span>
+                    <button onclick="removeItemFromOrder(${index})" class="text-red-500 hover:text-red-700 text-xs ml-2">
+                        [X]
+                    </button>
+                `;
+                list.appendChild(listItem);
+            });
+
+            totalDisplay.textContent = total.toFixed(2);
+        }
+
+        window.submitOrder = async () => {
+            const customerName = document.getElementById('customer-name-input').value.trim() || 'Cliente';
+            
+            if (currentOrderItems.length === 0) {
+                document.getElementById('message-box').textContent = "La orden debe contener al menos un producto.";
+                document.getElementById('message-box-container').classList.remove('hidden');
+                setTimeout(() => document.getElementById('message-box-container').classList.add('hidden'), 3000);
+                return;
+            }
+
+            const newOrder = {
+                customerName: customerName,
+                items: currentOrderItems,
+                total: parseFloat(document.getElementById('order-total').textContent),
+                orderTaker: userId
+            };
+
+            await addOrderToDB(newOrder);
+
+            // Resetear la orden
+            currentOrderItems = [];
+            document.getElementById('customer-name-input').value = '';
+            renderCurrentOrder();
+            
+            document.getElementById('message-box').textContent = `Orden de ${customerName} ingresada con éxito.`;
+            document.getElementById('message-box-container').classList.remove('hidden');
+            setTimeout(() => document.getElementById('message-box-container').classList.add('hidden'), 3000);
+        };
+        
+        // --- Inicialización al cargar el DOM ---
+        document.addEventListener('DOMContentLoaded', () => {
+            initializeFirebase();
+            setupProductSelector();
+            renderCurrentOrder(); // Inicializar lista vacía
+        });
+
+    </script>
+    <style>
+        /* Estilos personalizados para la temática Vaporwave/Arcade */
+        body {
+            background-color: #1A1A2E; /* background-dark */
+            color: #F6F7E9; /* text-light */
+            font-family: 'Inter', sans-serif;
+        }
+        .header-glow {
+            text-shadow: 0 0 8px #E94560, 0 0 10px #00FFFF;
+        }
+        .action-btn {
+            padding: 4px 10px;
+            border-radius: 8px;
+            font-size: 0.8rem;
+            transition: all 0.2s;
+        }
+        .input-style {
+            background-color: #2C2C4A; /* card-dark */
+            border: 1px solid #E94560; /* primary-fuchsia */
+            color: #00FFFF; /* secondary-cyan */
+            padding: 8px;
+            border-radius: 6px;
+            box-shadow: 0 0 5px rgba(233, 69, 96, 0.5);
+        }
+        /* Override para select y option */
+        .input-style select, .input-style option {
+            background-color: #2C2C4A; 
+            color: #F6F7E9;
+        }
+        .font-mono {
+            font-family: 'monospace';
+        }
+
+        /* Responsive Grid para el Dashboard */
+        #orders-dashboard {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 20px;
+        }
+    </style>
+</head>
+<body class="min-h-screen p-4 md:p-8">
+
+    <!-- Modal de Mensaje (Reemplazo de alert) -->
+    <div id="message-box-container" class="fixed top-0 left-0 w-full p-4 bg-primary-fuchsia text-text-light text-center z-50 shadow-2xl hidden">
+        <span id="message-box" class="font-bold"></span>
+    </div>
+
+    <!-- Encabezado y Logo -->
+    <header class="text-center mb-10">
+        <!-- Logo cargado del archivo del usuario -->
+        <img src="BiteHouse.jpg" alt="Logo BiteHouse Vaporwave" class="w-24 h-24 mx-auto mb-4 rounded-full border-4 border-secondary-cyan shadow-lg">
+        <h1 class="text-4xl md:text-5xl font-extrabold header-glow mb-2 font-mono">
+            BITEHOUSE
+        </h1>
+        <p class="text-lg text-secondary-cyan">Sistema de Gestión de Órdenes (Vaporwave Edition)</p>
+        <p id="user-info" class="text-xs text-gray-500 mt-2">Cargando...</p>
+    </header>
+
+    <main class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+
+        <!-- Columna de Ingreso de Órdenes -->
+        <section class="lg:col-span-1 p-6 rounded-xl bg-card-dark shadow-xl border-2 border-primary-fuchsia h-fit sticky top-4">
+            <h2 class="text-2xl font-bold mb-6 text-primary-fuchsia font-mono border-b border-primary-fuchsia pb-2">
+                [+ INGRESO DE ORDEN]
+            </h2>
+
+            <!-- Formulario de Cliente -->
+            <div class="mb-6">
+                <label for="customer-name-input" class="block text-text-light mb-2">Nombre del Cliente / ID Mesa:</label>
+                <input type="text" id="customer-name-input" placeholder="Ej: Mesa 4 / John Doe" class="input-style w-full">
+            </div>
+
+            <!-- Formulario de Items (Añadir Producto) -->
+            <div class="mb-6 border-b border-gray-700 pb-4">
+                <h3 class="text-xl font-semibold mb-3 text-secondary-cyan">Añadir Producto</h3>
+                
+                <label for="product-select" class="block text-text-light mb-2">Producto:</label>
+                <select id="product-select" class="input-style w-full mb-3"></select>
+                
+                <div class="flex space-x-3 mb-4">
+                    <div class="w-1/2">
+                        <label for="quantity-input" class="block text-text-light mb-2">Cantidad:</label>
+                        <input type="number" id="quantity-input" value="1" min="1" class="input-style w-full text-center">
+                    </div>
+                    <div class="w-1/2">
+                        <label for="unit-price" class="block text-text-light mb-2">Precio Unitario:</label>
+                        <input type="text" id="unit-price" readonly class="input-style w-full bg-gray-600 cursor-not-allowed">
+                    </div>
+                </div>
+                
+                <button onclick="addItemToOrder()" class="w-full py-2 rounded-lg font-bold text-background-dark bg-secondary-cyan hover:bg-opacity-80 transition-colors shadow-lg">
+                    Añadir Item
+                </button>
+            </div>
+
+            <!-- Resumen de Orden Actual -->
+            <div class="mb-6">
+                <h3 class="text-xl font-semibold mb-3 text-primary-fuchsia font-mono">
+                    -- ITEMS A INGRESAR --
+                </h3>
+                <ul id="current-order-list" class="space-y-1 p-2 bg-gray-800 rounded-lg">
+                    <!-- Items se renderizarán aquí -->
+                    <li class="text-gray-400 italic">Añade productos a la orden.</li>
+                </ul>
+            </div>
+            
+            <!-- Total y Botón de Envío -->
+            <div class="flex justify-between items-center text-2xl font-extrabold mb-4 pt-4 border-t border-primary-fuchsia">
+                <span>TOTAL:</span>
+                <span class="text-primary-fuchsia font-mono" id="order-total">0.00 $</span>
+            </div>
+            
+            <button onclick="submitOrder()" class="w-full py-3 rounded-lg text-2xl font-extrabold text-background-dark bg-primary-fuchsia hover:bg-opacity-80 transition-colors shadow-2xl">
+                INGRESAR ORDEN
+            </button>
+
+        </section>
+
+        <!-- Columna de Dashboard de Órdenes -->
+        <section class="lg:col-span-2">
+            <h2 class="text-3xl font-bold mb-6 text-secondary-cyan font-mono border-b border-secondary-cyan pb-2">
+                [ DASHBOARD DE ÓRDENES ]
+            </h2>
+
+            <div id="orders-dashboard">
+                <!-- Las órdenes se renderizarán aquí -->
+                <p class="text-text-light text-center py-4 text-lg">Cargando órdenes...</p>
+            </div>
+        </section>
+
+    </main>
+</body>
+</html>
